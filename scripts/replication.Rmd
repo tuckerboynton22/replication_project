@@ -1,0 +1,366 @@
+---
+title: "Gov 52 Final Replication Project"
+author: "Tucker Boynton"
+date: "5/7/2021"
+output: pdf_document
+header-includes:
+    - \usepackage{setspace}\doublespacing
+bibliography: bibliography/bibliography.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+if (!require(foreign)) install.packages("foreign")
+if (!require(ggtext)) install.packages("ggtext")
+if (!require(readxl)) install.packages("readxl")
+if (!require(ggrepel)) install.packages("ggrepel")
+if (!require(stargazer)) install.packages("stargazer")
+if (!require(tidyverse)) install.packages("tidyverse"); library(tidyverse)
+if (!require(gt)) install.packages("gt"); library(gt)
+
+setwd("..")
+frontier201 <- foreign::read.dta("data/frontier201.dta")
+lewis205 <- foreign::read.dta("data/lewis205b.dta")
+teamaggs <- readxl::read_excel("data/teamaggs.xlsx")
+playerseasons <- readxl::read_excel("data/playerseasons.xlsx")
+```
+
+\centering
+\raggedright
+
+## Introduction
+|       In this report, I replicate the 2006 journal article by Jahn K. Hakes and Raymond D. Sauer titled *An Economic Evaluation of the Moneyball Hypothesis* [@hakes_economic_2006]. In it, Hakes and Sauer examine the evolution of returns to particular baseball skills relative to how much those skills actually impact winning. They theorize that the publication of *Moneyball: The Art of Winning an Unfair Game* served as a market-correcting force that resulted in higher compensation for the ability to get on base relative to compensation for the ability to hit for power. They also hypothesize that prior to *Moneyball*, teams were overcompensating power and undercompensating getting on base relative to the true impact of those skills on winning baseball games.
+|       *Moneyball: The Art of Winning an Unfair Game* is a seminal publication by Michael Lewis about the early-2000s Oakland Athletics and their general manager Billy Beane, who used analytics to find unconventional ways to win despite the franchise having one of the lowest payrolls in Major League Baseball [@lewis_moneyball_2003]. Prioritizing getting on base as opposed to hitting for power was central to the Beane's strategy, and Hakes and Sauer test the theory that he discovered a market inefficiency that was then corrected in the mid-2000s. Importantly, on-base percentage measures a player's propensity to reach base safely (more of a finesse skill), whereas slugging percentage measures how well a player hits for power (more of a brute strength skill).
+|       In order to conduct this analysis, the authors first run a series of linear regressions of team win percentage on team/opponent slugging percentage and team/opponent on-base percentage. The ratio of coefficients on slugging and on-base percentage represents - albeit crudely - the relative importance of each of those statistics to winning baseball games. Then, the authors regress log player salary on lagged slugging and on-base percentage. If the market is in equilibrium, the ratio of coefficients on slugging and on-base percentage for those two regression specifications should be equivalent, as players would be rewarded for their true contributions to winning. Hakes and Sauer find that in the early 2000s, the ratio of on-base to slugging coefficients was much larger for the win percentage regression than for the salary regression, which suggests players were paid too much for power and not enough for finesse, but that there was a rise in the salary returns to on-base percentage in the mid-2000s (specifically in 2004).
+
+## Replication
+
+|       In order to reconstruct Table 1, which displays coefficients for the regressions of team win percentage on on-base and slugging percentage, I run four regressions and input the results to {stargazer}. The first two columns use only on-base percentage for/against and slugging percentage for/against respectively, while the third uses all four of the aforementioned variables. In order to "restrict the coefficient [on slugging/on-base] to equal its counterpart" as the authors do in the fourth column of the original paper, I regress win percentage on on-base and slugging percentage differential (team minus opponent), whose coefficients represent the change in win percentage associated with an increase in a team's own on-base/slugging percentage or a decrease in a team's opponent on-base/slugging percentage (p. 176).
+
+```{r Table 1, results='asis', message=FALSE, echo=FALSE, fig.align='center'}
+## Run regressions 1-3
+model1 <- lm(wpct ~ obp + obpagnst + factor(year), data = teamaggs)
+model2 <- lm(wpct ~ slg + slgagnst + factor(year), data = teamaggs)
+model3 <- lm(wpct ~ slg + slgagnst + obp + obpagnst + factor(year), data = teamaggs)
+
+## Add new variables for OBP & SLG differentials
+teamaggs <- teamaggs %>%
+  mutate(obpdiff = obp - obpagnst,
+         slgdiff = slg - slgagnst)
+
+## Run regression 4
+model4 <- lm(wpct ~ slgdiff + obpdiff + factor(year), data = teamaggs)
+
+## Display regression results
+stargazer::stargazer(model1, model2, model3, model4, type = "latex", header = FALSE, font.size = "small",
+                     star.cutoffs = NA, omit = "year", omit.stat = c("adj.rsq", "f", "ser"),
+                     title = "The Impact of On-Base and Slugging Percentage on Win Percentage", df = FALSE,
+                     dep.var.caption = "Model", dep.var.labels.include = FALSE, intercept.bottom = FALSE,
+                     covariate.labels = c("Constant",
+                                          "On-Base",
+                                          "On-Base against",
+                                          "Slugging",
+                                          "Slugging against",
+                                          "Slugging diff",
+                                          "On-Base diff"),
+                     notes = c("Note: Aggregate statistics for teams from 1999-2003.",
+                              "Models include year indicators. Dependent variable is win pct."),
+                     notes.label = "",
+                     notes.align = "l",
+                     notes.append = FALSE)
+```
+
+|       The coefficients in the fourth column suggest that a 1 percentage point increase in on-base percentage differential corresponds to an approximately 2.0 percentage point increase in win percentage, and a 1 percentage point increase in slugging percentage differential corresponds to an approximately 0.9 percentage point increase in win percentage. Notably, these regression results suggest that on-base percentage is more than two times as important to winning baseball games as is slugging percentage.
+
+```{r Table 2, results='asis', message=FALSE, echo=FALSE, fig.align='center'}
+## Create data frame of summary stats of yearly salaries
+yearly_salaries <- lewis205 %>%
+  filter(salyear >= 2000, salyear <= 2004, pa > 130) %>%
+  select(salyear, salary) %>%
+  group_by(salyear) %>%
+  summarize(
+    N = n(),
+    Mean = mean(salary) / 10^6,
+    `10th percentile` = quantile(salary, 0.10) / 10^6,
+    Median = median(salary) / 10^6,
+    `90th percentile` = quantile(salary, 0.90) / 10^6
+  ) %>%
+  select(-salyear) %>%
+  t() %>%
+  as.data.frame()
+
+colnames(yearly_salaries) <- c(2000, 2001, 2002, 2003, 2004)
+
+## Display df of yearly salary summary stats
+yearly_salaries %>%
+  gt(rownames_to_stub = T) %>%
+  tab_header(
+    title = "Table 2: Summary Statistics",
+    subtitle = "Player salaries (in millions)"
+  ) %>%
+  cols_align(align = "center", columns = c(2:6)) %>%
+  fmt_number(columns = 2:6, rows = 2:5, decimals = 2)
+
+## Create data frame of means of positional salaries
+positional_salaries <- lewis205 %>%
+  filter(salyear >= 2000, salyear <= 2004, pa > 130) %>%
+  mutate(pos = case_when(
+    pripos == "SS" | pripos == "2B" | pripos == "3B" ~ "Infielders",
+    pripos == "OF" ~ "Outfielders",
+    pripos == "C" ~ "Catchers",
+    pripos == "1B" | pripos == "DH" ~ "First basemen/DH"
+  )) %>%
+  select(pos, salary, salyear) %>%
+  group_by(pos, salyear) %>%
+  summarize(
+    N = n(),
+    Mean = mean(salary) / 10^6
+  )
+
+## Create data frame of means of power/non-power hitter salaries
+power_salaries <- lewis205 %>%
+  filter(salyear >= 2000, salyear <= 2004, pa > 130) %>%
+  mutate(pos = case_when(
+    hr > 25 ~ "HR > 25",
+    hr < 14 ~ "HR < 14"
+  )) %>%
+  filter(!is.na(pos)) %>%
+  select(pos, salary, salyear) %>%
+  group_by(pos, salyear) %>%
+  summarize(
+    N = n(),
+    Mean = mean(salary) / 10^6
+  )
+
+## Bind positional/power hitter data together and rearrange using indicators
+overall_salaries <- rbind(power_salaries, positional_salaries) %>%
+  mutate(ind0 = ifelse(salyear == 2000, 1, 0),
+         ind1 = ifelse(salyear == 2001, 1, 0),
+         ind2 = ifelse(salyear == 2002, 1, 0),
+         ind3 = ifelse(salyear == 2003, 1, 0),
+         ind4 = ifelse(salyear == 2004, 1, 0)) %>%
+  group_by(pos) %>%
+  summarize(
+    mean0 = sum(Mean*ind0),
+    n0 = sum(N*ind0),
+    mean1 = sum(Mean*ind1),
+    n1 = sum(N*ind1),
+    mean2 = sum(Mean*ind2),
+    n2 = sum(N*ind2),
+    mean3 = sum(Mean*ind3),
+    n3 = sum(N*ind3),
+    mean4 = sum(Mean*ind4),
+    n4 = sum(N*ind4)
+  )
+
+## Display positional/power hitter averages
+overall_salaries %>%
+  gt() %>%
+  cols_label(
+    mean0 = "Mean",
+    mean1 = "Mean",
+    mean2 = "Mean",
+    mean3 = "Mean",
+    mean4 = "Mean",
+    n0 = "N",
+    n1 = "N",
+    n2 = "N",
+    n3 = "N",
+    n4 = "N",
+    pos = ""
+  ) %>%
+  tab_spanner(label = "2000", columns = 2:3) %>%
+  tab_spanner(label = "2001", columns = 4:5) %>%
+  tab_spanner(label = "2002", columns = 6:7) %>%
+  tab_spanner(label = "2003", columns = 8:9) %>%
+  tab_spanner(label = "2004", columns = 10:11) %>%
+  fmt_number(columns = c(2,4,6,8,10), decimals = 2) %>%
+  cols_align(align = "center", columns = c(2:11)) %>%
+  tab_source_note("Note: Summary statistics for salaries of players with more than 130 plate appearances.") %>%
+  as_latex()
+```
+
+|       Table 2, split into two parts, displays summary statistics for player salaries based on a number of subsections of the data. In order to reconstruct the first part of the the table, I group the full player data set by year, generate summary statistics, transpose the data frame, and display results using the {gt} package. The second part requires a bit more manipulation; because the groupings do not partition the data per se (the categories "HR > 25" and "HR < 14" must be calculated separately from the positional groupings), I calculate mean and number of observations for each position and then for the home run categories. Finally, I bind the two data frames, re-orient the data to reflect the structure of the table in the paper, and again use the {gt} package to display results.
+|       In terms of general trends, it is clear that salaries increased over the years in question, and power hitters (> 25 home runs) as well as positions that tend to correlate with more power (first base, designated hitter) were compensated more highly than non-power hitters (< 14 home runs, infielders).
+
+```{r Table 3, results='asis', message=FALSE, echo=FALSE, fig.align='center'}
+## Filter to include only players with 130+ plate appearances
+players <- subset(playerseasons, playerseasons$pa >= 130)
+
+## Run models
+salary_model1 <- lm(lnsal ~ obp + slg + pa + arbit + free + catch + inf + factor(year), data = players)
+salary_model2 <- lm(lnsal ~ obp + slg + pa + arbit + free + catch + inf + factor(year), data = subset(players, players$year < 2003))
+salary_model3 <- lm(lnsal ~ obp + slg + pa + arbit + free + catch + inf, data = subset(players, players$year == 1999))
+salary_model4 <- lm(lnsal ~ obp + slg + pa + arbit + free + catch + inf, data = subset(players, players$year == 2000))
+salary_model5 <- lm(lnsal ~ obp + slg + pa + arbit + free + catch + inf, data = subset(players, players$year == 2001))
+salary_model6 <- lm(lnsal ~ obp + slg + pa + arbit + free + catch + inf, data = subset(players, players$year == 2002))
+salary_model7 <- lm(lnsal ~ obp + slg + pa + arbit + free + catch + inf, data = subset(players, players$year == 2003))
+
+## Assign years and run for loop to get salary predictions for 1 SD from mean
+years <- c(1999, 2000, 2001, 2002, 2003)
+
+for(i in 1:5){
+  obp2 <- mean(players$obp[players$year == years[i]], na.rm = T)+sd(players$obp[players$year == years[i]], na.rm = T)
+  obp1 <- mean(players$obp[players$year == years[i]], na.rm = T)
+  assign(paste0("ob_", i), round(exp(get(paste0("salary_model", i+2))$coefficients[[2]]*obp2)-exp(get(paste0("salary_model", i+2))$coefficients[[2]]*obp1), 2))
+  slg2 <- mean(players$slg[players$year == years[i]], na.rm = T)+sd(players$slg[players$year == years[i]], na.rm = T)
+  slg1 <- mean(players$slg[players$year == years[i]], na.rm = T)
+  assign(paste0("slg_", i), round(exp(get(paste0("salary_model", i+2))$coefficients[[3]]*slg2)-exp(get(paste0("salary_model", i+2))$coefficients[[3]]*slg1), 2))
+}
+
+## Display results & 1 SD deviation predictions
+stargazer::stargazer(salary_model1, salary_model2, salary_model3, salary_model4, salary_model5, salary_model6, salary_model7,
+                     type = "latex", header = FALSE, font.size = "small", omit.stat = c("adj.rsq", "f", "ser"),
+                     column.sep.width = "0pt", star.cutoffs = NA, omit = "year",
+                     dep.var.labels.include = FALSE, dep.var.caption = "", df = FALSE, model.numbers = FALSE,
+                     title = "Table 3: The Baseball Labor Market's Valuation of On-Base and Slugging Percentage",
+                     covariate.labels = c("On-Base",
+                                          "Slugging",
+                                          "Plate appearances",
+                                          "Arbitration eligible",
+                                          "Free agency",
+                                          "Catcher dummy",
+                                          "Infielder dummy"),
+                     column.labels = c("All years",
+                                        "2000-2003",
+                                        "2000",
+                                        "2001",
+                                        "2002",
+                                        "2003",
+                                        "2004"),
+                     add.lines = list(c("Value of 1 SD increase (millions)"),
+                                      c("On-Base",  "", "", ob_1, ob_2, ob_3, ob_4, ob_5),
+                                      c("Slugging", "", "", slg_1, slg_2, slg_3, slg_4, slg_5)),
+                     table.layout = "=c-!t-s-a=n",
+                     notes = c("Note: Dependent variable is ln(salary) in year t. Performance variables in year t-1.",
+                               "First two models include year indicators. Includes players with 130+ plate appearances.",
+                               "Final two rows show value of 1 standard deviation increase from average.",
+                               "Standard errors in parentheses."),
+                     notes.label = "",
+                     notes.align = "l",
+                     notes.append = FALSE)
+```
+
+|       Table 3 displays the coefficients from linear regressions of log player salary on various lagged performance statistics. For each column, I simply subset the data by year(s) and run the same regression specification (year is used as a dummy variable in the first two columns). The difficult part of creating this table is generating the last two rows, which show the predicted salary change associated with a one standard deviation increase in slugging and on-base percentage. With a log-linear model, the impact of any increase depends on where you start, and the authors do not specify whether they started at the mean, median, or some other location. As such, I use a for loop to calculate the salary change associated with a one standard deviation increase in slugging/on-base percentage from the mean for each year's model and display the results using the "add.lines" option for {stargazer} tables.
+|       The results in Table 3 show that for most of the period, there was not a statistically significant premium placed on on-base percentage (four out of five seasons), but the opposite is true of slugging percentage, which has a statistically significant coefficient (at the 5\% level) in each of the five periods. Moreover, the ratio of point estimates for the coefficients on on-base to slugging percentage is clearly inconsistent with the 2:1 ratio I would expect after seeing the results of the previous regression, but the relative returns appear to approach equilibrium in 2004 (consistent with the *Moneyball* thesis).
+
+```{r Figure 1, message=FALSE, echo=FALSE, fig.align='center', fig.cap="Returns to on-base percentage increased considerably from 2003-04."}
+## Store coefficients on OBP and assign type = 'On base %'
+obp_coefs <- c(salary_model3$coefficients[2], salary_model4$coefficients[2],
+               salary_model5$coefficients[2], salary_model6$coefficients[2], salary_model7$coefficients[2])
+type_obp <- c(rep("On base %", times = 5))
+obp_coefs <- cbind(obp_coefs, type_obp)
+
+## Store coefficients on SLG and assign type = 'Slugging %'
+slg_coefs <- c(salary_model3$coefficients[3], salary_model4$coefficients[3],
+               salary_model5$coefficients[3], salary_model6$coefficients[3], salary_model7$coefficients[3])
+type_slg <- c(rep("Slugging %", times = 5))
+slg_coefs <- cbind(slg_coefs, type_slg)
+
+## Bind two coefficient dfs together and add years
+coefs <- rbind(slg_coefs, obp_coefs)
+years <- c(2000, 2001, 2002, 2003, 2004)
+coefs <- as.data.frame(cbind(years, coefs))
+coefs$slg_coefs <- as.numeric(coefs$slg_coefs)
+
+## Plot coefficients
+coefs %>%
+  ggplot(aes(years, slg_coefs, group = type_slg)) +
+  geom_point(aes(shape = type_slg)) +
+  geom_path(aes(linetype = type_slg)) +
+  theme_bw() +
+  labs(
+    x = "Year",
+    y = "Impact on log salary",
+    title = "Labor Market Returns to On-Base and Slugging Percentage Over Time"
+  ) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.position = "right",
+    legend.title = element_blank(),
+    plot.title = ggtext::element_markdown(size = 10, hjust = 0.5)) +
+  scale_y_continuous(breaks = seq(from = 0, to = 4, by = 0.5))
+```
+
+|       In Figure 1, I display the coefficient estimates on slugging and on-base percentage by season. In order to take advantage of {ggplot}'s "group" option, which cleanly separates observations with different values of categorical variables (in this case, on-base vs. slugging percentage coefficients), I need the data in long form. Hence, I create separate data frames with on-base and slugging percentage coefficients, assign each observation a "type" of coefficient (either on-base or slugging \%), and bind the rows. Then, I simply use {ggplot} with "group = type" and plot the evolution of the two coefficients separately, also specifying "linetype" and "shape." The visual trend here is stark: for the first four years, slugging percentage dominates, and in 2004, on-base percentage shoots up, signifying the sudden emergence of a salary premium on the ability to get on base.
+|       For Figure 2, the data set provided by the authors includes different observations from the initial paper and seems to have different units on the salary index, but nonetheless, I plot salary index versus win percentage. I also use the "ggrepel" function from the {ggtext} package in order to label the points for which "convex == 1," which represents the team being on the frontier for efficient conversion of salary into wins (hard to tell because data set has many points missing). Although many of the data points are missing, OAK01, or Oakland Athletics 2001, is clearly visible on the frontier of converting salary into win percentage, providing visual support for the fact that Billy Beane made the most of a tough hand.
+
+```{r Figure 2, warning=FALSE, message=FALSE, echo=FALSE, fig.align='center', fig.cap="Labeled teams (team abbreviation and year) are on frontier of conversion of salary into wins."}
+frontier201 <- frontier201 %>%
+  mutate(salary = case_when(
+    !is.na(pay8693) ~ pay8693,
+    !is.na(pay9497) ~ pay9497,
+    !is.na(pay9803) ~ pay9803,
+    !is.na(pay0406) ~ pay0406
+  ))
+
+frontier201 %>%
+  ggplot(aes(wpct, salary)) +
+  geom_point(shape = "diamond") +
+  ggrepel::geom_text_repel(aes(label = ifelse(convex == 1, team, ""))) +
+  theme_bw() +
+  labs(
+    x = "Team winning percentage",
+    y = "Salary index",
+    title = "Frontier for Efficient Conversion of Team Salary into Team Winning Percentage",
+    subtitle = "Various teams, 1986 to 2006"
+  ) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    plot.title = ggtext::element_markdown(size = 12, hjust = 0.5),
+    plot.subtitle = ggtext::element_markdown(hjust = 0.5))
+```
+
+|       Finally, I am unable to replicate the fourth table because the paper's data repository does not provide ticket price or attendance data for the Oakland Athletics, and the links cited in the paper lead to websites that are no longer operational. Fortunately, this table is not central to the analysis of returns to on-base and slugging percentage.
+|       Overall, the coefficients in my regression tables are extremely similar (if not exactly the same) as Hakes and Sauer's results. The small discrepancies appear to come from differences in the number of observations in each regression (they are off by between five and 10 depending on the regression). Given the fact that the data provided for Figure 2 does not exactly match what is in the paper, it is likely that the other online data sets are not identical to the ones used in the paper itself, so there are likely some observations that appear in my data set but not the original (and vice versa). Overall, however, I am extremely satisfied with how closely my results match the authors' conclusions, and the only table that I was unable to replicate was fortunately not vital to the thesis of the paper.
+
+```{r Figure 3, warning=FALSE, message=FALSE, echo=FALSE, fig.align='center', fig.cap="From 2001-04, the player salary market made significant progress in approaching equilibrium."}
+## Get coefficient ratio for each year
+coef_ratios <- c()
+true_ratio <- model4$coefficients[[3]]/model4$coefficients[[2]]
+
+for(i in 3:7){
+  new_ratio <- get(paste0("salary_model", i))$coefficients[2] / get(paste0("salary_model", i))$coefficients[3]
+  coef_ratios <- append(coef_ratios, new_ratio)
+}
+
+coef_ratios <- as.data.frame(cbind(coef_ratios, years))
+
+## Plot coefficient ratios
+coef_ratios %>%
+  ggplot(aes(years, coef_ratios)) +
+  geom_point() +
+  geom_path() +
+  geom_hline(yintercept = true_ratio, linetype = "dashed") +
+  theme_bw() +
+  labs(
+    x = "Year",
+    y = "Coefficient on on-base / coefficient on slugging",
+    title = "Ratio of Labor Market Returns to On-Base vs. Slugging Percentage Over Time"
+  ) +
+  annotate(geom = "text", x = 2000.5, y = 2.2, label = "Equilibrium ratio") +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.position = "right",
+    legend.title = element_blank(),
+    plot.title = ggtext::element_markdown(size = 10, hjust = 0.5))
+```
+
+## Extension
+|       One extension I would like to see is a direct visual comparison between the market value and "true" value of slugging and on-base percentage over time. Theoretically, the first regression represents the "true" relative values of slugging and on-base percentage, but the authors never provide a visual aid of how the ratio of coefficients evolves over time in the labor market - we see the individual coefficients in Figure 1 but not how their ratio compares to the theoretical equilibrium ratio. In Figure 3, I plot the ratio of coefficients from the yearly regressions in Table 3 as well as the market equilibrium ratio, which is the ratio of coefficients in the fourth column of Table 1. In theory, as market approaches equilibrium, the ratio of coefficients in the salary regressions will approach the ratio of coefficients in the team win percentage regression; we see that it does, although the ratio does not reach full equilibrium by 2004.
+|       This extension allows the reader to obtain more context in the story. Hakes and Sauer put forward tremendous evidence that there was some correction in the labor market but never explicitly show how quickly the inefficiency disappeared - or if it disappeared entirely at all.
+
+## Conclusion
+|       Like Hakes and Sauer, I find that the early 2000s featured a clear trend of overvaluation of slugging percentage and undervaluation of on-base percentage. However, after the publication of *Moneyball: The Art of Winning an Unfair Game*, the market approached outcomes that were closer to equilibrium by providing higher relative returns to on-base percentage, altogether strengthening the central claim of the *Moneyball* hypothesis. In the future, I would be interested in revisiting this analysis with more recent data in order to see whether market efficiency has been reached. In fact, more recent analysis of the *Moneyball* hypothesis was conducted in 2011 by Anthony Farrar and Thomas H. Bruggink in 2011 [@farrar_new_2011]. In closing, I would like to thank Professors Hakes and Sauer for their email correspondence about this paper and the open-source nature of their data^[All data used in this paper can be found at http://media.clemson.edu/economics/data/sports/moneyball/ and all code at https://github.com/tuckerboynton22/gov52_replication]. Please reach out to me at [tuckerboynton\@college.harvard.edu](mailto:tuckerboynton\@college.harvard.edu) if you have any comments, questions, or concerns.
+
+\newpage
+
+## References
